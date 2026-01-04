@@ -1,4 +1,4 @@
-name: not z3q build_
+name: not x1q build_
 
 on:
   workflow_dispatch:
@@ -36,7 +36,6 @@ jobs:
             bzip2 libbz2-dev squashfs-tools pngcrush schedtool dpkg-dev \
             liblz4-tool optipng libssl-dev python-is-python3 python3-virtualenv \
             llvm clang lld
-
       # Initialize submodules
       - name: Initialize submodules
         run: git submodule update --init --recursive
@@ -50,7 +49,6 @@ jobs:
             sudo mkdir -p "${{ env.ARTIFACT_DIR }}" && sudo chown -R runner:runner "${{ env.ARTIFACT_DIR }}"
           }
           ls -la
-
       # Rest of your steps...
       - name: Set permissions
         run: chmod +x x1q.sh
@@ -60,8 +58,7 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHATID: ${{ secrets.TELEGRAM_CHATID }}
         run: |
-           sudo bash z3q.sh ${{ github.event.inputs.build_target }}
-
+           sudo bash x1q.sh ${{ github.event.inputs.build_target }}
       # Prepare artifacts
       - name: Prepare artifacts
         run: |
@@ -78,7 +75,6 @@ jobs:
           if [[ -f out/arch/arm64/boot/dtbo.img ]]; then
             cp out/arch/arm64/boot/dtbo.img AnyKernel3/dtbo.img
           fi
-
       # Upload kernel artifact
       - name: Upload kernel to artifact
         uses: actions/upload-artifact@v4
