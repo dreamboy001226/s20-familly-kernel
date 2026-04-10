@@ -1,4 +1,4 @@
-name: not y2q build
+name: Astro y2q build
 
 on:
   workflow_dispatch:
@@ -23,7 +23,7 @@ jobs:
     
     steps:
       # Checkout repository
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
         
@@ -37,51 +37,16 @@ jobs:
             liblz4-tool optipng libssl-dev python-is-python3 python3-virtualenv \
             llvm clang lld
 
-      # Initialize submodules
-      - name: Initialize submodules
-        run: git submodule update --init --recursive
+      - name: Make build script executable
+        run: chmod +x build-${{ matrix.device }}.sh
 
-      # Create artifact directory with unique name
-      - name: Create artifact directory
-        run: |
-          echo "Creating artifact directory: ${{ env.ARTIFACT_DIR }}"
-          mkdir -p "${{ env.ARTIFACT_DIR }}" || {
-            echo "Failed to create directory, trying with sudo..."
-            sudo mkdir -p "${{ env.ARTIFACT_DIR }}" && sudo chown -R runner:runner "${{ env.ARTIFACT_DIR }}"
-          }
-          ls -la
-
-      # Rest of your steps...
-      - name: Set permissions
-        run: chmod +x y2q.sh
-
-      - name: Build kernel
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHATID: ${{ secrets.TELEGRAM_CHATID }}
-        run: |
-           sudo bash y2q.sh ${{ github.event.inputs.build_target }}
-
-      # Prepare artifacts
-      - name: Prepare artifacts
-        run: |
-          
-          if [[ -f out/arch/arm64/boot/Image.gz-dtb ]]; then
-            cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image.gz-dtb
-          elif [[ -f out/arch/arm64/boot/Image-dtb ]]; then
-            cp out/arch/arm64/boot/Image-dtb AnyKernel3/Image-dtb
-          elif [[ -f out/arch/arm64/boot/Image.gz ]]; then
-            cp out/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
-          elif [[ -f out/arch/arm64/boot/Image ]]; then
-            cp out/arch/arm64/boot/Image AnyKernel3/Image
-          fi
-          if [[ -f out/arch/arm64/boot/dtbo.img ]]; then
-            cp out/arch/arm64/boot/dtbo.img AnyKernel3/dtbo.img
-          fi
-
-      # Upload kernel artifact
-      - name: Upload kernel to artifact
+      - name: Run build script
+        run: ./build-${{ matrix.device }}.sh
+        
+      - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: output_kernel
-          path: AnyKernel3/*
+          name: Astro_Core_${{ matrix.device }}
+          path: |
+            out/*.zip
+            *.zip  

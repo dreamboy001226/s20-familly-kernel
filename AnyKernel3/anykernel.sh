@@ -4,16 +4,16 @@
 ## AnyKernel setup
 # begin properties
 properties() { '
-kernel.string=-YacineKernel 
-do.devicecheck=1
+kernel.string=-Astro Kernel 
+do.devicecheck=
 do.modules=0
 do.systemless=1
 do.cleanup=1
 do.cleanuponabort=0
-device.name1=z3q
-device.name2=x1qxx
-device.name3=y2q
-supported.versions=11 - 15
+device.name1=
+device.name2=
+device.name3=
+supported.versions=11 - 16
 supported.patchlevels=
 '; } # end properties
 
