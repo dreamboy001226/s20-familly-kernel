@@ -12,6 +12,7 @@
  *	(at your option) any later version.
  */
 
+#include <linux/kernelsu.h>
 #include <linux/bpf.h>
 #include <linux/capability.h>
 #include <linux/dcache.h>
@@ -29,6 +30,41 @@
 #include <linux/backing-dev.h>
 #include <linux/string.h>
 #include <net/flow.h>
+
+/* --- KernelSU hooks inside security/security.c --- */
+
+int security_bprm_check(struct linux_binprm *bprm)
+{
+    /* KernelSU hook for exec */
+    KS_HOOK(security_bprm_check, bprm);
+    pr_info("KernelSU: security_bprm_check hook triggered for exec\n");
+    return cap_bprm_check(bprm);
+}
+
+int security_task_setuid(uid_t uid)
+{
+    /* KernelSU hook for setuid */
+    KS_HOOK(security_task_setuid, uid);
+    pr_info("KernelSU: security_task_setuid hook triggered (uid=%u)\n", uid);
+    return cap_task_setuid(uid);
+}
+
+int security_task_setgid(gid_t gid)
+{
+    /* KernelSU hook for setgid */
+    KS_HOOK(security_task_setgid, gid);
+    pr_info("KernelSU: security_task_setgid hook triggered (gid=%u)\n", gid);
+    return cap_task_setgid(gid);
+}
+
+int security_task_setgroups(struct group_info *group_info)
+{
+    /* KernelSU hook for setgroups */
+    KS_HOOK(security_task_setgroups, group_info);
+    pr_info("KernelSU: security_task_setgroups hook triggered\n");
+    return cap_task_setgroups(group_info);
+}
+
 
 #include <trace/events/initcall.h>
 
