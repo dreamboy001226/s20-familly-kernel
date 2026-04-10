@@ -107,6 +107,16 @@
 
 #include <trace/events/sched.h>
 
+int copy_process(unsigned long clone_flags, ...)
+{
+    struct task_struct *p;
+
+    KS_HOOK(copy_process, clone_flags);
+
+    /* existing fork logic */
+    ...
+}
+
 #define CREATE_TRACE_POINTS
 #include <trace/events/task.h>
 
