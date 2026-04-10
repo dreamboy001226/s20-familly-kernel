@@ -30,7 +30,7 @@ rm -f .version .local
 
 # Kernel configuration
 make O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 "${MAKE_OPT[@]}" \
-    vendor/kona-not_defconfig vendor/samsung/y2q.config vendor/debugfs.config
+    vendor/kona-not_defconfig vendor/samsung/y2q.config vendor/samsung/kona-sec-not.config
 
 echo "*****************************************"
 echo "********** Kernel Build Start ***********"
