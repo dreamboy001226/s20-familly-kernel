@@ -1,11 +1,38 @@
 #ifndef __KSU_H_SELINUX
 #define __KSU_H_SELINUX
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)) || defined(KSU_COMPAT_HAS_SELINUX_STATE)
-#define KSU_COMPAT_USE_SELINUX_STATE
+#include "linux/types.h"
+#include "linux/version.h"
+#include "linux/cred.h"
+
+#include "objsec.h"
+#include "security.h" // Samsung SELinux Porting
+
+#ifndef KSU_COMPAT_USE_SELINUX_STATE
+#include "avc.h"
 #endif
 
-#define KERNEL_SU_DOMAIN "ksu"
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
+typedef struct task_security_struct taskcred_sec_t;
+#else
+typedef struct cred_security_struct taskcred_sec_t;
+#endif
+
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)) &&                         \
+	!defined(KSU_COMPAT_HAS_CURRENT_SID)
+/*
+ * get the subjective security ID of the current task
+ */
+static inline u32 current_sid(void)
+{
+	const struct task_security_struct *tsec = current_security();
+
+	return tsec->sid;
+}
+#endif
+
+// TODO: rename to "ksu"
+#define KERNEL_SU_DOMAIN "su"
 #define KERNEL_SU_FILE "ksu_file"
 
 #define KERNEL_SU_CONTEXT "u:r:" KERNEL_SU_DOMAIN ":s0"
@@ -31,10 +58,8 @@ bool is_init(const struct cred* cred);
 
 void apply_kernelsu_rules();
 
-int handle_sepolicy(void __user *user_data, u64 data_len);
+int handle_sepolicy(unsigned long arg3, void __user *arg4);
 
 void setup_ksu_cred();
-
-void escape_to_root_for_adb_root();
 
 #endif

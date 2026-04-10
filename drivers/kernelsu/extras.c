@@ -1,3 +1,12 @@
+#include <linux/security.h>
+#include <linux/atomic.h>
+#include <linux/version.h>
+
+#include "feature.h"
+#include "klog.h"
+#include "ksud.h"
+#include "seccomp_cache.h"
+
 // sorry for the ifdef hell
 // but im too lazy to fragment this out.
 // theres only one feature so far anyway
@@ -71,11 +80,7 @@ static int get_sid()
 	return 0;
 }
 
-#if defined(CONFIG_KPROBES) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)
-#include <linux/kprobes.h>
-static struct kprobe *slow_avc_audit_kp;
-
-static int ksu_handle_slow_avc_audit(u32 *tsid)
+int ksu_handle_slow_avc_audit(u32 *tsid)
 {
 	if (atomic_read(&disable_spoof))
 		return 0;
@@ -90,6 +95,13 @@ static int ksu_handle_slow_avc_audit(u32 *tsid)
 	return 0;
 }
 
+#ifdef KSU_KPROBES_HOOK
+#include <linux/kprobes.h>
+#include <linux/slab.h>
+#include "arch.h"
+static struct kprobe *slow_avc_audit_kp;
+//	.symbol_name = "slow_avc_audit",
+//	.pre_handler = slow_avc_audit_pre_handler,
 static int slow_avc_audit_pre_handler(struct kprobe *p, struct pt_regs *regs)
 {
 	if (atomic_read(&disable_spoof))
@@ -145,25 +157,11 @@ static void destroy_kprobe(struct kprobe **kp_ptr)
 	kfree(kp);
 	*kp_ptr = NULL;
 }
-#else // CONFIG_KPROBES
-int ksu_handle_slow_avc_audit_new(u32 tsid, u16 *tclass)
-{
-	if (atomic_read(&disable_spoof))
-		return 0;
-
-	if (tsid != su_sid)
-		return 0;
-
-	pr_info("avc_spoof/slow_avc_audit: prevent log for sid: %u\n", su_sid);
-	*tclass = 0;
-
-	return 0;
-}
-#endif
+#endif // KSU_KPROBES_HOOK
 
 void ksu_avc_spoof_disable(void)
 {
-#if defined(CONFIG_KPROBES) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)
+#ifdef KSU_KPROBES_HOOK
 	pr_info("avc_spoof/exit: unregister slow_avc_audit kprobe!\n");
 	destroy_kprobe(&slow_avc_audit_kp);
 #endif
@@ -179,7 +177,7 @@ void ksu_avc_spoof_enable(void)
 		return;
 	}
 
-#if defined(CONFIG_KPROBES) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)
+#ifdef KSU_KPROBES_HOOK
 	pr_info("avc_spoof/init: register slow_avc_audit kprobe!\n");
 	slow_avc_audit_kp = init_kprobe("slow_avc_audit", slow_avc_audit_pre_handler);
 #endif	
@@ -193,7 +191,7 @@ void ksu_avc_spoof_late_init()
 {
 	boot_completed = true;
 	
-	if (ksu_avc_spoof_enabled) {
+    if (ksu_avc_spoof_enabled) {
 		ksu_avc_spoof_enable();
 	}
 }

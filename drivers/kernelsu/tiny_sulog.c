@@ -13,7 +13,7 @@ static uint8_t sulog_index_next = 0;
 
 static DEFINE_SPINLOCK(sulog_lock);
 
-static void tiny_sulog_init_heap()
+void sulog_init_heap()
 {
 	sulog_buf_ptr = kzalloc(SULOG_BUFSIZ, GFP_KERNEL);
 	if (!sulog_buf_ptr)
@@ -48,19 +48,17 @@ static inline uint32_t boottime_s_get()
 	return (uint32_t)boottime_s;
 }
 
-static void write_sulog(uint8_t sym)
+void write_sulog(uint8_t sym)
 {
 	if (!sulog_buf_ptr)
 		return;
 
 	unsigned int offset = sulog_index_next * sizeof(struct sulog_entry);
 	struct sulog_entry entry = {0};
-	
-	kuid_t current_uid = current_uid();
 
 	// WARNING!!! this is LE only!
 	entry.s_time = boottime_s_get();
-	entry.data = (uint32_t)ksu_get_uid_t(current_uid);
+	entry.data = (uint32_t)current_uid().val;
 	*((char *)&entry.data + 3) = sym;
 
 	// we can perform this write atomic on 64-bit
@@ -69,7 +67,7 @@ static void write_sulog(uint8_t sym)
 	spin_lock(&sulog_lock);
 
 #ifdef CONFIG_64BIT
-	*(volatile uint64_t *)(sulog_buf_ptr + offset) = *(uint64_t *)&entry;
+	*(volatile uint64_t *)(sulog_buf_ptr + offset) = *(volatile uint64_t *)&entry;
 #else
 	__builtin_memcpy(sulog_buf_ptr + offset, &entry, sizeof(entry));
 #endif
@@ -88,7 +86,7 @@ struct sulog_entry_rcv_ptr {
 	uint64_t uptime_ptr; // uptime
 };
 
-static int send_sulog_dump(void __user *uptr)
+int send_sulog_dump(void __user *uptr)
 {
 	if (!sulog_buf_ptr)
 		return 1;
@@ -105,16 +103,16 @@ static int send_sulog_dump(void __user *uptr)
 
 	uint32_t uptime =  boottime_s_get();
 
-	if (copy_to_user((void __user *)(uintptr_t)sbuf.uptime_ptr, &uptime, sizeof(uptime) ))
+	if (copy_to_user((void __user *)sbuf.uptime_ptr, &uptime, sizeof(uptime) ))
 		return 1;
 
 	// send index
-	if (copy_to_user((void __user *)(uintptr_t)sbuf.index_ptr, &sulog_index_next, sizeof(sulog_index_next) ))
+	if (copy_to_user((void __user *)sbuf.index_ptr, &sulog_index_next, sizeof(sulog_index_next) ))
 		return 1;
 
 	// send buffer data
 	spin_lock(&sulog_lock);
-	if (copy_to_user((void __user *)(uintptr_t)sbuf.buf_ptr, sulog_buf_ptr, SULOG_BUFSIZ )) {
+	if (copy_to_user((void __user *)sbuf.buf_ptr, sulog_buf_ptr, SULOG_BUFSIZ )) {
 		spin_unlock(&sulog_lock);
 		return 1;
 	}
