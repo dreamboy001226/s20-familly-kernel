@@ -20,7 +20,9 @@ env:
 jobs:
   buildkernel:
     runs-on: ubuntu-latest
-    
+strategy:
+      matrix:
+        device: [y2q]    
     steps:
       # Checkout repository
       - uses: actions/checkout@v5
