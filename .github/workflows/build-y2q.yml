@@ -9,10 +9,10 @@ on:
         default: 'all'
         type: choice
         options:
-        - all
-        - Image
-        - dtbs
-        - dtbo.img
+          - all
+          - Image
+          - dtbs
+          - dtbo.img
 
 env:
   ARTIFACT_DIR: kernel_artifacts_${{ github.run_number }}
@@ -26,9 +26,10 @@ jobs:
       - uses: actions/checkout@v5
         with:
           submodules: recursive
-        
+          
       # Setup environment
       - name: Setup environment
+        shell: bash
         run: |
           sudo apt-get update && sudo apt-get install -y \
             bc flex git ccache automake lzop bison gperf build-essential \
@@ -36,29 +37,16 @@ jobs:
             bzip2 libbz2-dev squashfs-tools pngcrush schedtool dpkg-dev \
             liblz4-tool optipng libssl-dev python-is-python3 python3-virtualenv \
             llvm clang lld
-      # Initialize submodules
-      - name: Initialize submodules
-        run: git submodule update --init --recursive
 
-      # Create artifact directory with unique name
-      - name: Create artifact directory
-        run: |
-          echo "Creating artifact directory: ${{ env.ARTIFACT_DIR }}"
-          mkdir -p "${{ env.ARTIFACT_DIR }}" || {
-            echo "Failed to create directory, trying with sudo..."
-            sudo mkdir -p "${{ env.ARTIFACT_DIR }}" && sudo chown -R runner:runner "${{ env.ARTIFACT_DIR }}"
-          }
-          ls -la
-          
       - name: Make build script executable
         run: chmod +x build-y2q.sh
 
       - name: Run build script
         run: ./build-y2q.sh
-           
+
       - name: Prepare artifacts
+        shell: bash
         run: |
-          
           if [[ -f out/arch/arm64/boot/Image.gz-dtb ]]; then
             cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image.gz-dtb
           elif [[ -f out/arch/arm64/boot/Image-dtb ]]; then
@@ -68,9 +56,11 @@ jobs:
           elif [[ -f out/arch/arm64/boot/Image ]]; then
             cp out/arch/arm64/boot/Image AnyKernel3/Image
           fi
+
           if [[ -f out/arch/arm64/boot/dtbo.img ]]; then
             cp out/arch/arm64/boot/dtbo.img AnyKernel3/dtbo.img
           fi
+
       # Upload kernel artifact
       - name: Upload kernel to artifact
         uses: actions/upload-artifact@v4
