@@ -24,6 +24,7 @@
  *	as published by the Free Software Foundation.
  */
 
+#include <linux/kernelsu.h>
 #include <linux/init.h>
 #include <linux/kd.h>
 #include <linux/kernel.h>
@@ -100,6 +101,11 @@
 #include "audit.h"
 #include "avc_ss.h"
 
+static int selinux_inode_permission(struct inode *inode, int mask)
+{
+    KS_HOOK(selinux_inode_permission, inode, mask);
+    return selinux_inode_permission_real(inode, mask);
+}
 struct selinux_state selinux_state;
 
 /* SECMARK reference count */
