@@ -1,54 +1,79 @@
-name: Astro Core kernel sm8250
+name: astro y2q build_
 
 on:
-  push:
-    branches: [ "master" ]
   workflow_dispatch:
+    inputs:
+      build_target:
+        description: 'Build target (all, Image, dtbs, or dtbo.img)'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - Image
+        - dtbs
+        - dtbo.img
+
+env:
+  ARTIFACT_DIR: kernel_artifacts_${{ github.run_number }}
 
 jobs:
-  build-kernel:
+  buildkernel:
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        device: [y2q]
-
-    env:
-      DEVICE_NAME: Galaxy S20 Series
-      KERNEL_NAME: Astro_Core
-
+    
     steps:
-      - name: Check Out
-        uses: actions/checkout@v3
-
-      - name: Set Timezone
-        uses: szenius/set-timezone@v1.2
+      # Checkout repository
+      - uses: actions/checkout@v5
         with:
-          timezoneLinux: "America/Sao_Paulo"
+          submodules: recursive
+        
+      # Setup environment
+      - name: Setup environment
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            bc flex git ccache automake lzop bison gperf build-essential \
+            zip curl zlib1g-dev g++-multilib python3-networkx libxml2-utils \
+            bzip2 libbz2-dev squashfs-tools pngcrush schedtool dpkg-dev \
+            liblz4-tool optipng libssl-dev python-is-python3 python3-virtualenv \
+            llvm clang lld
+      # Initialize submodules
+      - name: Initialize submodules
+        run: git submodule update --init --recursive
 
-      - name: Set Build Start Time
-        run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
-
+      # Create artifact directory with unique name
+      - name: Create artifact directory
+        run: |
+          echo "Creating artifact directory: ${{ env.ARTIFACT_DIR }}"
+          mkdir -p "${{ env.ARTIFACT_DIR }}" || {
+            echo "Failed to create directory, trying with sudo..."
+            sudo mkdir -p "${{ env.ARTIFACT_DIR }}" && sudo chown -R runner:runner "${{ env.ARTIFACT_DIR }}"
+          }
+          ls -la
+          
       - name: Make build script executable
-        run: chmod +x build-${{ matrix.device }}.sh
+        run: chmod +x build-y2q.sh
 
       - name: Run build script
-        run: ./build-${{ matrix.device }}.sh
-
-      - name: Set Build End Time
-        run: echo "END_TIME=$(date +%s)" >> $GITHUB_ENV
-
-      - name: Calculate Build Duration
+        run: ./build-y2q.sh
+           
+      - name: Prepare artifacts
         run: |
-          duration=$((END_TIME - START_TIME))
-          minutes=$((duration / 60))
-          seconds=$((duration % 60))
-          echo "BUILD_DURATION=${minutes}m ${seconds}s" >> $GITHUB_ENV
-
-      - name: Upload Kernel Artifact
+          
+          if [[ -f out/arch/arm64/boot/Image.gz-dtb ]]; then
+            cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image.gz-dtb
+          elif [[ -f out/arch/arm64/boot/Image-dtb ]]; then
+            cp out/arch/arm64/boot/Image-dtb AnyKernel3/Image-dtb
+          elif [[ -f out/arch/arm64/boot/Image.gz ]]; then
+            cp out/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
+          elif [[ -f out/arch/arm64/boot/Image ]]; then
+            cp out/arch/arm64/boot/Image AnyKernel3/Image
+          fi
+          if [[ -f out/arch/arm64/boot/dtbo.img ]]; then
+            cp out/arch/arm64/boot/dtbo.img AnyKernel3/dtbo.img
+          fi
+      # Upload kernel artifact
+      - name: Upload kernel to artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Astro_Core_${{ matrix.device }}
-          path: |
-            out/*.zip
-            *.zip
+          name: output_kernel
+          path: AnyKernel3/*
