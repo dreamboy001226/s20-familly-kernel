@@ -31,7 +31,7 @@ rm -f .version .local
 
 # Kernel configuration
 make O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 "${MAKE_OPT[@]}" \
-    vendor/kona-not_defconfig vendor/ksu.config vendor/samsung/y2q.config vendor/debugfs.config
+    vendor/kona-not_defconfig vendor/samsung/y2q.config vendor/debugfs.config
 
 echo "*****************************************"
 echo "********** Kernel Build Start ***********"
@@ -58,5 +58,3 @@ cp "$IMAGE" "$ANYKERNEL_DIR/Image"
 cd "$ANYKERNEL_DIR"
 rm -f *.zip *.img Image dtb
 zip -r9 "${KERNEL_NAME}$(date +"%Y%m%d")+y2q.zip" . -x "*.git*" -x "README.md"
-
-echo "The bomb has been planted."
