@@ -37,16 +37,16 @@ extern const u8 kallsyms_names[] __weak;
  * Tell the compiler that the count isn't in the small data section if the arch
  * has one (eg: FRV).
  */
-extern const unsigned long kallsyms_num_syms
+extern const unsigned int kallsyms_num_syms
 __attribute__((weak, section(".rodata")));
 
 extern const unsigned long kallsyms_relative_base
 __attribute__((weak, section(".rodata")));
 
-extern const u8 kallsyms_token_table[] __weak;
+extern const char kallsyms_token_table[] __weak;
 extern const u16 kallsyms_token_index[] __weak;
 
-extern const unsigned long kallsyms_markers[] __weak;
+extern const unsigned int kallsyms_markers[] __weak;
 
 /*
  * Expand a compressed symbol data into the resulting uncompressed string,
@@ -57,7 +57,8 @@ static unsigned int kallsyms_expand_symbol(unsigned int off,
 					   char *result, size_t maxlen)
 {
 	int len, skipped_first = 0;
-	const u8 *tptr, *data;
+	const char *tptr;
+	const u8 *data;
 
 	/* Get the compressed symbol length from the first symbol byte. */
 	data = &kallsyms_names[off];
@@ -158,6 +159,26 @@ static unsigned long kallsyms_sym_address(int idx)
 	return kallsyms_relative_base - 1 - kallsyms_offsets[idx];
 }
 
+#if defined(CONFIG_CFI_CLANG) && defined(CONFIG_THINLTO)
+/*
+ * LLVM appends a hash to static function names when ThinLTO and CFI are
+ * both enabled, which causes confusion and potentially breaks user space
+ * tools, so we will strip the postfix from expanded symbol names.
+ */
+static inline char *cleanup_symbol_name(char *s)
+{
+	char *res = NULL;
+
+	res = strrchr(s, '$');
+	if (res)
+		*res = '\0';
+
+	return res;
+}
+#else
+static inline char *cleanup_symbol_name(char *s) { return NULL; }
+#endif
+
 /* Lookup the address for this symbol. Returns 0 if not found. */
 unsigned long kallsyms_lookup_name(const char *name)
 {
@@ -165,15 +186,26 @@ unsigned long kallsyms_lookup_name(const char *name)
 	unsigned long i;
 	unsigned int off;
 
+	/* Skip the search for empty string. */
+	if (!*name)
+		return 0;
+
 	for (i = 0, off = 0; i < kallsyms_num_syms; i++) {
 		off = kallsyms_expand_symbol(off, namebuf, ARRAY_SIZE(namebuf));
 
 		if (strcmp(namebuf, name) == 0)
 			return kallsyms_sym_address(i);
+
+		if (cleanup_symbol_name(namebuf) && strcmp(namebuf, name) == 0)
+			return kallsyms_sym_address(i);
 	}
 	return module_kallsyms_lookup_name(name);
 }
 
+/*
+ * Iterate over all symbols in vmlinux.  For symbols from modules use
+ * module_kallsyms_on_each_symbol instead.
+ */
 int kallsyms_on_each_symbol(int (*fn)(void *, const char *, struct module *,
 				      unsigned long),
 			    void *data)
@@ -188,8 +220,9 @@ int kallsyms_on_each_symbol(int (*fn)(void *, const char *, struct module *,
 		ret = fn(data, namebuf, NULL, kallsyms_sym_address(i));
 		if (ret != 0)
 			return ret;
+		cond_resched();
 	}
-	return module_kallsyms_on_each_symbol(fn, data);
+	return 0;
 }
 
 static unsigned long get_symbol_pos(unsigned long addr,
@@ -268,30 +301,6 @@ int kallsyms_lookup_size_offset(unsigned long addr, unsigned long *symbolsize,
 	       !!__bpf_address_lookup(addr, symbolsize, offset, namebuf);
 }
 
-#ifdef CONFIG_CFI_CLANG
-/*
- * LLVM appends .cfi to function names when CONFIG_CFI_CLANG is enabled,
- * which causes confusion and potentially breaks user space tools, so we
- * will strip the postfix from expanded symbol names.
- */
-static inline void cleanup_symbol_name(char *s)
-{
-	char *res;
-
-#ifdef CONFIG_THINLTO
-	/* Filter out hashes from static functions */
-	res = strrchr(s, '$');
-	if (res)
-		*res = '\0';
-#endif
-	res = strrchr(s, '.');
-	if (res && !strcmp(res, ".cfi"))
-		*res = '\0';
-}
-#else
-static inline void cleanup_symbol_name(char *s) {}
-#endif
-
 /*
  * Lookup an address
  * - modname is set to NULL if it's in the kernel.
@@ -318,9 +327,7 @@ const char *kallsyms_lookup(unsigned long addr,
 				       namebuf, KSYM_NAME_LEN);
 		if (modname)
 			*modname = NULL;
-
-		ret = namebuf;
-		goto found;
+		return namebuf;
 	}
 
 	/* See if it's in a module or a BPF JITed image. */
@@ -333,16 +340,11 @@ const char *kallsyms_lookup(unsigned long addr,
 	if (!ret)
 		ret = ftrace_mod_address_lookup(addr, symbolsize,
 						offset, modname, namebuf);
-
-found:
-	cleanup_symbol_name(namebuf);
 	return ret;
 }
 
 int lookup_symbol_name(unsigned long addr, char *symname)
 {
-	int res;
-
 	symname[0] = '\0';
 	symname[KSYM_NAME_LEN - 1] = '\0';
 
@@ -353,23 +355,15 @@ int lookup_symbol_name(unsigned long addr, char *symname)
 		/* Grab name */
 		kallsyms_expand_symbol(get_symbol_offset(pos),
 				       symname, KSYM_NAME_LEN);
-		goto found;
+		return 0;
 	}
 	/* See if it's in a module. */
-	res = lookup_module_symbol_name(addr, symname);
-	if (res)
-		return res;
-
-found:
-	cleanup_symbol_name(symname);
-	return 0;
+	return lookup_module_symbol_name(addr, symname);
 }
 
 int lookup_symbol_attrs(unsigned long addr, unsigned long *size,
 			unsigned long *offset, char *modname, char *name)
 {
-	int res;
-
 	name[0] = '\0';
 	name[KSYM_NAME_LEN - 1] = '\0';
 
@@ -381,16 +375,10 @@ int lookup_symbol_attrs(unsigned long addr, unsigned long *size,
 		kallsyms_expand_symbol(get_symbol_offset(pos),
 				       name, KSYM_NAME_LEN);
 		modname[0] = '\0';
-		goto found;
+		return 0;
 	}
 	/* See if it's in a module. */
-	res = lookup_module_symbol_attrs(addr, size, offset, modname, name);
-	if (res)
-		return res;
-
-found:
-	cleanup_symbol_name(name);
-	return 0;
+	return lookup_module_symbol_attrs(addr, size, offset, modname, name);
 }
 
 /* Look up a kernel symbol and return it in a text buffer. */
@@ -634,6 +622,11 @@ static void s_stop(struct seq_file *m, void *p)
 {
 }
 
+#ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+extern bool susfs_starts_with(const char *str, const char *prefix);
+#endif
+
+
 static int s_show(struct seq_file *m, void *p)
 {
 	void *value;
@@ -657,12 +650,32 @@ static int s_show(struct seq_file *m, void *p)
 		seq_printf(m, "%px %c %s\t[%s]\n", value,
 			   type, iter->name, iter->module_name);
 	} else
+
 #ifndef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
-		seq_printf(m, "%px %c %s\n", value,
+		seq_printf(m, "%pK %c %s\n", (void *)iter->value,
 			   iter->type, iter->name);
 #else
 	{
-		if (strstr(iter->name, "ksu_") || !strncmp(iter->name, "susfs_", 6) || !strncmp(iter->name, "ksud", 4)) {
+		if (susfs_starts_with(iter->name, "ksu_") ||
+			susfs_starts_with(iter->name, "__ksu_") ||
+			susfs_starts_with(iter->name, "susfs_") ||
+			susfs_starts_with(iter->name, "ksud") ||
+			susfs_starts_with(iter->name, "is_ksu_") ||
+			susfs_starts_with(iter->name, "is_manager_") ||
+			susfs_starts_with(iter->name, "escape_to_") ||
+			susfs_starts_with(iter->name, "setup_selinux") ||
+			susfs_starts_with(iter->name, "track_throne") ||
+			susfs_starts_with(iter->name, "on_post_fs_data") ||
+			susfs_starts_with(iter->name, "try_umount") ||
+			susfs_starts_with(iter->name, "kernelsu") ||
+			susfs_starts_with(iter->name, "__initcall__kmod_kernelsu") ||
+			susfs_starts_with(iter->name, "apply_kernelsu") ||
+			susfs_starts_with(iter->name, "handle_sepolicy") ||
+			susfs_starts_with(iter->name, "getenforce") ||
+			susfs_starts_with(iter->name, "setenforce") ||
+			susfs_starts_with(iter->name, "is_zygote"))
+		{
+
 			return 0;
 		}
 		seq_printf(m, "%px %c %s\n", value,
@@ -755,16 +768,16 @@ const char *kdb_walk_kallsyms(loff_t *pos)
 }
 #endif	/* CONFIG_KGDB_KDB */
 
-static const struct file_operations kallsyms_operations = {
-	.open = kallsyms_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = seq_release_private,
+static const struct proc_ops kallsyms_proc_ops = {
+	.proc_open	= kallsyms_open,
+	.proc_read	= seq_read,
+	.proc_lseek	= seq_lseek,
+	.proc_release	= seq_release_private,
 };
 
 static int __init kallsyms_init(void)
 {
-	proc_create("kallsyms", 0444, NULL, &kallsyms_operations);
+	proc_create("kallsyms", 0444, NULL, &kallsyms_proc_ops);
 	return 0;
 }
 device_initcall(kallsyms_init);

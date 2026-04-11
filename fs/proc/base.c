@@ -99,12 +99,30 @@
 #include <trace/events/oom.h>
 #include "internal.h"
 #include "fd.h"
+#if defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)
+#include <linux/susfs_def.h>
+#endif
 
 #include "../../lib/kstrtox.h"
 
 #ifdef CONFIG_PAGE_BOOST
 #include <linux/delayacct.h>
 #endif
+
+struct task_kill_info {
+	struct task_struct *task;
+	struct work_struct work;
+};
+
+static void proc_kill_task(struct work_struct *work)
+{
+	struct task_kill_info *kinfo = container_of(work, typeof(*kinfo), work);
+	struct task_struct *task = kinfo->task;
+
+	send_sig(SIGKILL, task, 0);
+	put_task_struct(task);
+	kfree(kinfo);
+}
 
 /* NOTE:
  *	Implementing inode permission operations in /proc is almost
@@ -146,9 +164,13 @@ struct pid_entry {
 #define REG(NAME, MODE, fops)				\
 	NOD(NAME, (S_IFREG|(MODE)), NULL, &fops, {})
 #define ONE(NAME, MODE, show)				\
-	NOD(NAME, (S_IFREG|(MODE)), 			\
+	NOD(NAME, (S_IFREG|(MODE)),			\
 		NULL, &proc_single_file_operations,	\
 		{ .proc_show = show } )
+#define ATTR(LSM, NAME, MODE)				\
+	NOD(NAME, (S_IFREG|(MODE)),			\
+		NULL, &proc_pid_attr_operations,	\
+		{ .lsm = LSM })
 
 /*
  * Count the number of hardlinks for the pid_entry table, excluding the .
@@ -877,6 +899,9 @@ static ssize_t mem_rw(struct file *file, char __user *buf,
 	ssize_t copied;
 	char *page;
 	unsigned int flags;
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+	struct vm_area_struct *vma;
+#endif
 
 	if (!mm)
 		return 0;
@@ -894,6 +919,20 @@ static ssize_t mem_rw(struct file *file, char __user *buf,
 	while (count > 0) {
 		size_t this_len = min_t(size_t, count, PAGE_SIZE);
 
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+		vma = find_vma(mm, addr);
+		if (vma && vma->vm_file) {
+			struct inode *inode = file_inode(vma->vm_file);
+			if (SUSFS_IS_INODE_SUS_MAP(inode)) {
+				if (write) {
+					copied = -EFAULT;
+				} else {
+					copied = -EIO;
+				}
+				break;
+			}
+		}
+#endif
 		if (write && copy_from_user(page, buf, this_len)) {
 			copied = -EFAULT;
 			break;
@@ -1094,6 +1133,7 @@ static int __set_oom_adj(struct file *file, int oom_adj, bool legacy)
 {
 	struct mm_struct *mm = NULL;
 	struct task_struct *task;
+	char task_comm[TASK_COMM_LEN];
 	int err = 0;
 
 	task = get_proc_task(file_inode(file));
@@ -1143,6 +1183,8 @@ static int __set_oom_adj(struct file *file, int oom_adj, bool legacy)
 	if (!legacy && has_capability_noaudit(current, CAP_SYS_RESOURCE))
 		task->signal->oom_score_adj_min = (short)oom_adj;
 	trace_oom_score_adj_update(task);
+	if (oom_adj >= 700)
+		strncpy(task_comm, task->comm, TASK_COMM_LEN);
 
 	if (mm) {
 		struct task_struct *p;
@@ -1170,6 +1212,20 @@ static int __set_oom_adj(struct file *file, int oom_adj, bool legacy)
 err_unlock:
 	mutex_unlock(&oom_adj_mutex);
 	put_task_struct(task);
+	/* These apps burn through CPU in the background. Don't let them. */
+	if (!err && oom_adj >= 700) {
+		if (!strcmp(task_comm, "id.GoogleCamera")) {
+			struct task_kill_info *kinfo;
+
+			kinfo = kmalloc(sizeof(*kinfo), GFP_KERNEL);
+			if (kinfo) {
+				get_task_struct(task);
+				kinfo->task = task;
+				INIT_WORK(&kinfo->work, proc_kill_task);
+				schedule_work(&kinfo->work);
+			}
+		}
+	}
 	return err;
 }
 
@@ -1583,21 +1639,11 @@ static const struct file_operations proc_pid_sched_wake_up_idle_operations = {
 
 #endif	/* CONFIG_SMP */
 
-#ifdef CONFIG_SCHED_WALT
+#ifdef CONFIG_PELT_COMPATIBILITY_LAYER
 
 static int sched_init_task_load_show(struct seq_file *m, void *v)
 {
-	struct inode *inode = m->private;
-	struct task_struct *p;
-
-	p = get_proc_task(inode);
-	if (!p)
-		return -ESRCH;
-
-	seq_printf(m, "%d\n", sched_get_init_task_load(p));
-
-	put_task_struct(p);
-
+	seq_puts(m, "0\n");
 	return 0;
 }
 
@@ -1605,33 +1651,7 @@ static ssize_t
 sched_init_task_load_write(struct file *file, const char __user *buf,
 	    size_t count, loff_t *offset)
 {
-	struct inode *inode = file_inode(file);
-	struct task_struct *p;
-	char buffer[PROC_NUMBUF];
-	int init_task_load, err;
-
-	memset(buffer, 0, sizeof(buffer));
-	if (count > sizeof(buffer) - 1)
-		count = sizeof(buffer) - 1;
-	if (copy_from_user(buffer, buf, count)) {
-		err = -EFAULT;
-		goto out;
-	}
-
-	err = kstrtoint(strstrip(buffer), 0, &init_task_load);
-	if (err)
-		goto out;
-
-	p = get_proc_task(inode);
-	if (!p)
-		return -ESRCH;
-
-	err = sched_set_init_task_load(p, init_task_load);
-
-	put_task_struct(p);
-
-out:
-	return err < 0 ? err : count;
+	return count;
 }
 
 static int sched_init_task_load_open(struct inode *inode, struct file *filp)
@@ -1649,17 +1669,7 @@ static const struct file_operations proc_pid_sched_init_task_load_operations = {
 
 static int sched_group_id_show(struct seq_file *m, void *v)
 {
-	struct inode *inode = m->private;
-	struct task_struct *p;
-
-	p = get_proc_task(inode);
-	if (!p)
-		return -ESRCH;
-
-	seq_printf(m, "%d\n", sched_get_group_id(p));
-
-	put_task_struct(p);
-
+	seq_puts(m, "0\n");
 	return 0;
 }
 
@@ -1667,33 +1677,7 @@ static ssize_t
 sched_group_id_write(struct file *file, const char __user *buf,
 	    size_t count, loff_t *offset)
 {
-	struct inode *inode = file_inode(file);
-	struct task_struct *p;
-	char buffer[PROC_NUMBUF];
-	int group_id, err;
-
-	memset(buffer, 0, sizeof(buffer));
-	if (count > sizeof(buffer) - 1)
-		count = sizeof(buffer) - 1;
-	if (copy_from_user(buffer, buf, count)) {
-		err = -EFAULT;
-		goto out;
-	}
-
-	err = kstrtoint(strstrip(buffer), 0, &group_id);
-	if (err)
-		goto out;
-
-	p = get_proc_task(inode);
-	if (!p)
-		return -ESRCH;
-
-	err = sched_set_group_id(p, group_id);
-
-	put_task_struct(p);
-
-out:
-	return err < 0 ? err : count;
+	return count;
 }
 
 static int sched_group_id_open(struct inode *inode, struct file *filp)
@@ -1711,19 +1695,7 @@ static const struct file_operations proc_pid_sched_group_id_operations = {
 
 static int sched_low_latency_show(struct seq_file *m, void *v)
 {
-	struct inode *inode = m->private;
-	struct task_struct *p;
-	bool low_latency;
-
-	p = get_proc_task(inode);
-	if (!p)
-		return -ESRCH;
-
-	low_latency = p->low_latency;
-	seq_printf(m, "%d\n", low_latency);
-
-	put_task_struct(p);
-
+	seq_puts(m, "0\n");
 	return 0;
 }
 
@@ -1731,21 +1703,7 @@ static ssize_t
 sched_low_latency_write(struct file *file, const char __user *buf,
 	    size_t count, loff_t *offset)
 {
-	struct task_struct *p = get_proc_task(file_inode(file));
-	bool low_latency;
-	int err;
-
-	if (!p)
-		return -ESRCH;
-
-	err =  kstrtobool_from_user(buf, count, &low_latency);
-	if (err)
-		goto out;
-
-	p->low_latency = low_latency;
-out:
-	put_task_struct(p);
-	return err < 0 ? err : count;
+	return count;
 }
 
 static int sched_low_latency_open(struct inode *inode, struct file *filp)
@@ -1761,7 +1719,7 @@ static const struct file_operations proc_pid_sched_low_latency_operations = {
 	.release	= single_release,
 };
 
-#endif	/* CONFIG_SCHED_WALT */
+#endif
 
 #ifdef CONFIG_SCHED_AUTOGROUP
 /*
@@ -1939,6 +1897,10 @@ out:
 	return ERR_PTR(error);
 }
 
+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+extern int susfs_open_redirect_spoof_do_proc_readlink(struct inode *inode, char *tmp_buf, int buflen);
+#endif
+
 static int do_proc_readlink(struct path *path, char __user *buffer, int buflen)
 {
 	char *tmp = (char *)__get_free_page(GFP_KERNEL);
@@ -1947,6 +1909,17 @@ static int do_proc_readlink(struct path *path, char __user *buffer, int buflen)
 
 	if (!tmp)
 		return -ENOMEM;
+
+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+	if (SUSFS_IS_INODE_OPEN_REDIRECT(path->dentry->d_inode)) {
+		if (!susfs_open_redirect_spoof_do_proc_readlink(path->dentry->d_inode, tmp, buflen)) {
+			len = strlen(tmp);
+			if (copy_to_user(buffer, tmp, len))
+				len = -EFAULT;
+			goto out;
+		}
+	}
+#endif
 
 	pathname = d_path(path, tmp, PAGE_SIZE);
 	len = PTR_ERR(pathname);
@@ -2286,11 +2259,11 @@ static int map_files_d_revalidate(struct dentry *dentry, unsigned int flags)
 		goto out;
 
 	if (!dname_to_vma_addr(dentry, &vm_start, &vm_end)) {
-		status = down_read_killable(&mm->mmap_sem);
+		status = mmap_read_lock_killable(mm);
 		if (!status) {
 			exact_vma_exists = !!find_exact_vma(mm, vm_start,
 							    vm_end);
-			up_read(&mm->mmap_sem);
+			mmap_read_unlock(mm);
 		}
 	}
 
@@ -2337,18 +2310,22 @@ static int map_files_get_link(struct dentry *dentry, struct path *path)
 	if (rc)
 		goto out_mmput;
 
-	rc = down_read_killable(&mm->mmap_sem);
+	rc = mmap_read_lock_killable(mm);
 	if (rc)
 		goto out_mmput;
 
 	rc = -ENOENT;
 	vma = find_exact_vma(mm, vm_start, vm_end);
 	if (vma && vma->vm_file) {
-		*path = vma->vm_file->f_path;
-		path_get(path);
-		rc = 0;
+		if (strstr(vma->vm_file->f_path.dentry->d_name.name, "lineage")) {
+			rc = kern_path("/dev/ashmem (deleted)", LOOKUP_FOLLOW, path);
+		} else {
+			*path = vma->vm_file->f_path;
+			path_get(path);
+			rc = 0;
+		}
 	}
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 
 out_mmput:
 	mmput(mm);
@@ -2438,7 +2415,7 @@ static struct dentry *proc_map_files_lookup(struct inode *dir,
 		goto out_put_task;
 
 	result = ERR_PTR(-EINTR);
-	if (down_read_killable(&mm->mmap_sem))
+	if (mmap_read_lock_killable(mm))
 		goto out_put_mm;
 
 	result = ERR_PTR(-ENOENT);
@@ -2451,7 +2428,7 @@ static struct dentry *proc_map_files_lookup(struct inode *dir,
 				(void *)(unsigned long)vma->vm_file->f_mode);
 
 out_no_vma:
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 out_put_mm:
 	mmput(mm);
 out_put_task:
@@ -2477,6 +2454,9 @@ proc_map_files_readdir(struct file *file, struct dir_context *ctx)
 	struct map_files_info info;
 	struct map_files_info *p;
 	int ret;
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+	struct inode *inode;
+#endif
 
 	ret = -ENOENT;
 	task = get_proc_task(file_inode(file));
@@ -2495,7 +2475,7 @@ proc_map_files_readdir(struct file *file, struct dir_context *ctx)
 	if (!mm)
 		goto out_put_task;
 
-	ret = down_read_killable(&mm->mmap_sem);
+	ret = mmap_read_lock_killable(mm);
 	if (ret) {
 		mmput(mm);
 		goto out_put_task;
@@ -2526,7 +2506,7 @@ proc_map_files_readdir(struct file *file, struct dir_context *ctx)
 			ret = -ENOMEM;
 			if (fa)
 				flex_array_free(fa);
-			up_read(&mm->mmap_sem);
+			mmap_read_unlock(mm);
 			mmput(mm);
 			goto out_put_task;
 		}
@@ -2534,6 +2514,11 @@ proc_map_files_readdir(struct file *file, struct dir_context *ctx)
 				vma = vma->vm_next) {
 			if (!vma->vm_file)
 				continue;
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+			inode = file_inode(vma->vm_file);
+			if (SUSFS_IS_INODE_SUS_MAP(inode))
+				continue;
+#endif
 			if (++pos <= ctx->pos)
 				continue;
 
@@ -2544,7 +2529,7 @@ proc_map_files_readdir(struct file *file, struct dir_context *ctx)
 				BUG();
 		}
 	}
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 	mmput(mm);
 
 	for (i = 0; i < nr_files; i++) {
@@ -2707,10 +2692,11 @@ static ssize_t timerslack_ns_write(struct file *file, const char __user *buf,
 	}
 
 	task_lock(p);
-	if (slack_ns == 0)
-		p->timer_slack_ns = p->default_timer_slack_ns;
-	else
-		p->timer_slack_ns = slack_ns;
+	if (task_is_realtime(p))
+		slack_ns = 0;
+	else if (slack_ns == 0)
+		slack_ns = p->default_timer_slack_ns;
+	p->timer_slack_ns = slack_ns;
 	task_unlock(p);
 
 out:
@@ -2862,7 +2848,7 @@ static ssize_t proc_pid_attr_read(struct file * file, char __user * buf,
 	if (!task)
 		return -ESRCH;
 
-	length = security_getprocattr(task,
+	length = security_getprocattr(task, PROC_I(inode)->op.lsm,
 				      (char*)file->f_path.dentry->d_name.name,
 				      &p);
 	put_task_struct(task);
@@ -2920,7 +2906,9 @@ static ssize_t proc_pid_attr_write(struct file * file, const char __user * buf,
 	if (rv < 0)
 		goto out_free;
 
-	rv = security_setprocattr(file->f_path.dentry->d_name.name, page, count);
+	rv = security_setprocattr(PROC_I(inode)->op.lsm,
+				  file->f_path.dentry->d_name.name, page,
+				  count);
 	mutex_unlock(&current->signal->cred_guard_mutex);
 out_free:
 	kfree(page);
@@ -2936,13 +2924,53 @@ static const struct file_operations proc_pid_attr_operations = {
 	.release	= mem_release,
 };
 
+#define LSM_DIR_OPS(LSM) \
+static int proc_##LSM##_attr_dir_iterate(struct file *filp, \
+			     struct dir_context *ctx) \
+{ \
+	return proc_pident_readdir(filp, ctx, \
+				   LSM##_attr_dir_stuff, \
+				   ARRAY_SIZE(LSM##_attr_dir_stuff)); \
+} \
+\
+static const struct file_operations proc_##LSM##_attr_dir_ops = { \
+	.read		= generic_read_dir, \
+	.iterate	= proc_##LSM##_attr_dir_iterate, \
+	.llseek		= default_llseek, \
+}; \
+\
+static struct dentry *proc_##LSM##_attr_dir_lookup(struct inode *dir, \
+				struct dentry *dentry, unsigned int flags) \
+{ \
+	return proc_pident_lookup(dir, dentry, \
+				  LSM##_attr_dir_stuff, \
+				  ARRAY_SIZE(LSM##_attr_dir_stuff)); \
+} \
+\
+static const struct inode_operations proc_##LSM##_attr_dir_inode_ops = { \
+	.lookup		= proc_##LSM##_attr_dir_lookup, \
+	.getattr	= pid_getattr, \
+	.setattr	= proc_setattr, \
+}
+
+#ifdef CONFIG_SECURITY_SMACK
+static const struct pid_entry smack_attr_dir_stuff[] = {
+	ATTR("smack", "current",	0666),
+};
+LSM_DIR_OPS(smack);
+#endif
+
 static const struct pid_entry attr_dir_stuff[] = {
-	REG("current",    S_IRUGO|S_IWUGO, proc_pid_attr_operations),
-	REG("prev",       S_IRUGO,	   proc_pid_attr_operations),
-	REG("exec",       S_IRUGO|S_IWUGO, proc_pid_attr_operations),
-	REG("fscreate",   S_IRUGO|S_IWUGO, proc_pid_attr_operations),
-	REG("keycreate",  S_IRUGO|S_IWUGO, proc_pid_attr_operations),
-	REG("sockcreate", S_IRUGO|S_IWUGO, proc_pid_attr_operations),
+	ATTR(NULL, "current",		0666),
+	ATTR(NULL, "prev",		0444),
+	ATTR(NULL, "exec",		0666),
+	ATTR(NULL, "fscreate",		0666),
+	ATTR(NULL, "keycreate",		0666),
+	ATTR(NULL, "sockcreate",	0666),
+#ifdef CONFIG_SECURITY_SMACK
+	DIR("smack",			0555,
+	    proc_smack_attr_dir_inode_ops, proc_smack_attr_dir_ops),
+#endif
 };
 
 static int proc_attr_dir_readdir(struct file *file, struct dir_context *ctx)
@@ -3472,7 +3500,7 @@ static const struct pid_entry tgid_base_stuff[] = {
 #ifdef CONFIG_SMP
 	REG("sched_wake_up_idle", 00644, proc_pid_sched_wake_up_idle_operations),
 #endif
-#ifdef CONFIG_SCHED_WALT
+#ifdef CONFIG_PELT_COMPATIBILITY_LAYER
 	REG("sched_init_task_load", 00644, proc_pid_sched_init_task_load_operations),
 	REG("sched_group_id", 00666, proc_pid_sched_group_id_operations),
 	REG("sched_boost", 0666,  proc_task_boost_enabled_operations),
@@ -3511,9 +3539,6 @@ static const struct pid_entry tgid_base_stuff[] = {
 	REG("mounts",     S_IRUGO, proc_mounts_operations),
 	REG("mountinfo",  S_IRUGO, proc_mountinfo_operations),
 	REG("mountstats", S_IRUSR, proc_mountstats_operations),
-#ifdef CONFIG_PROCESS_RECLAIM
-	REG("reclaim", 0666, proc_reclaim_operations),
-#endif
 #ifdef CONFIG_PROC_PAGE_MONITOR
 	REG("clear_refs", S_IWUSR, proc_clear_refs_operations),
 	REG("smaps",      S_IRUGO, proc_pid_smaps_operations),

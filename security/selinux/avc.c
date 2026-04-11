@@ -44,6 +44,12 @@
 #define avc_cache_stats_incr(field)	do {} while (0)
 #endif
 
+#ifdef CONFIG_KSU_SUSFS
+extern u32 susfs_ksu_sid;
+extern u32 susfs_priv_app_sid;
+bool susfs_is_avc_log_spoofing_enabled = false;
+#endif
+
 struct avc_entry {
 	u32			ssid;
 	u32			tsid;
@@ -187,6 +193,16 @@ static void avc_dump_query(struct audit_buffer *ab, struct selinux_state *state,
 	}
 
 	rc = security_sid_to_context(state, tsid, &scontext, &scontext_len);
+#ifdef CONFIG_KSU_SUSFS
+	if (unlikely(tsid == susfs_ksu_sid && susfs_is_avc_log_spoofing_enabled)) {
+		if (rc)
+			audit_log_format(ab, " tsid=%d", susfs_priv_app_sid);
+		else
+			audit_log_format(ab, " tcontext=%s", "u:r:priv_app:s0:c512,c768");
+		goto bypass_orig_flow;
+	}
+#endif
+
 	if (rc)
 		audit_log_format(ab, " tsid=%d", tsid);
 	else {
@@ -194,6 +210,9 @@ static void avc_dump_query(struct audit_buffer *ab, struct selinux_state *state,
 		kfree(scontext);
 	}
 
+#ifdef CONFIG_KSU_SUSFS
+bypass_orig_flow:
+#endif
 	BUG_ON(!tclass || tclass >= ARRAY_SIZE(secclass_map));
 	audit_log_format(ab, " tclass=%s", secclass_map[tclass-1].name);
 }
@@ -734,8 +753,7 @@ found:
 static void avc_audit_pre_callback(struct audit_buffer *ab, void *a)
 {
 	struct common_audit_data *ad = a;
-	audit_log_format(ab, "avc:  %s ",
-			 ad->selinux_audit_data->denied ? "denied" : "granted");
+	audit_log_format(ab, "avc:  denied ");
 	avc_dump_av(ab, ad->selinux_audit_data->tclass,
 			ad->selinux_audit_data->audited);
 	audit_log_format(ab, " for ");
@@ -755,10 +773,8 @@ static void avc_audit_post_callback(struct audit_buffer *ab, void *a)
 		       ad->selinux_audit_data->ssid,
 		       ad->selinux_audit_data->tsid,
 		       ad->selinux_audit_data->tclass);
-	if (ad->selinux_audit_data->denied) {
-		audit_log_format(ab, " permissive=%u",
-				 ad->selinux_audit_data->result ? 0 : 1);
-	}
+	audit_log_format(ab, " permissive=%u",
+			 ad->selinux_audit_data->result ? 0 : 1);
 }
 
 /* This is the slow part of avc audit with big stack footprint */
@@ -770,6 +786,13 @@ noinline int slow_avc_audit(struct selinux_state *state,
 	struct common_audit_data stack_data;
 	struct selinux_audit_data sad;
 
+	if (!denied)
+		return 0;
+
+	/* Only log permissive=1 messages for SECURITY_SELINUX_DEVELOP */
+	if (denied && !result)
+		return 0;
+
 	if (!a) {
 		a = &stack_data;
 		a->type = LSM_AUDIT_DATA_NONE;
@@ -780,7 +803,6 @@ noinline int slow_avc_audit(struct selinux_state *state,
 	sad.ssid = ssid;
 	sad.tsid = tsid;
 	sad.audited = audited;
-	sad.denied = denied;
 	sad.result = result;
 	sad.state = state;
 
