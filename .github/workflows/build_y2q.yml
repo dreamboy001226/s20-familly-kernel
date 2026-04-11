@@ -25,7 +25,7 @@ jobs:
       # Checkout repository
       - uses: actions/checkout@v5
         with:
-          submodules: recursive
+          submodules: true   # KernelSU if added as submodules
           
       # Setup environment
       - name: Setup environment
