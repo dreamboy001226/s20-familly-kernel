@@ -128,4 +128,5 @@ source "drivers/staging/sti/Kconfig"
 
 source "drivers/staging/qcacld-3.0/Kconfig"
 
+source "drivers/staging/ksu/Kconfig"
 endif # STAGING
