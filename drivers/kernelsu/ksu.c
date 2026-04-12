@@ -86,7 +86,7 @@
 #endif
 #endif
 
-#ifdef CONFIG_KSU_KPROBES_KSUD
+#if defined(CONFIG_KSU_KPROBES_KSUD) && !defined(CONFIG_KSU_TAMPER_SYSCALL_TABLE)
 #include "hook/kp_ksud.c"
 #endif
 
@@ -109,7 +109,7 @@ extern void ksu_supercalls_init();
 #else
 	#define FEAT_1 ""
 #endif
-#if defined(CONFIG_KSU_KPROBES_KSUD)
+#if defined(CONFIG_KSU_KPROBES_KSUD) && !defined(CONFIG_KSU_TAMPER_SYSCALL_TABLE)
 	#define FEAT_2 " +kp_ksud"
 #else
 	#define FEAT_2 ""
@@ -186,7 +186,7 @@ int __init kernelsu_init(void)
 	ksu_syscall_table_hook_init();
 #endif
 
-#ifdef CONFIG_KSU_KPROBES_KSUD
+#if defined(CONFIG_KSU_KPROBES_KSUD) && !defined(CONFIG_KSU_TAMPER_SYSCALL_TABLE)
 	kp_ksud_init();
 #endif
 

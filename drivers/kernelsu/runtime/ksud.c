@@ -384,6 +384,24 @@ static noinline void ksu_install_rc_hook(struct file *file)
 	return;
 }
 
+// for sys_read kp / syscall table
+__attribute__((cold))
+static noinline void ksu_handle_sys_read_fd(unsigned int fd)
+{
+	if (likely(!ksu_vfs_read_hook))
+		return;
+
+	if (!is_init(current_cred()))
+		return;
+
+	struct file *file = fget(fd);
+	if (!file) {
+		return;
+	}
+	ksu_install_rc_hook(file);
+	fput(file);
+}
+
 #define STAT_NATIVE 0
 #define STAT_STAT64 1
 

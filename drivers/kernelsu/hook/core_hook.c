@@ -118,7 +118,9 @@ static struct security_hook_list ksu_hooks[] = {
 	LSM_HOOK_INIT(inode_rename, ksu_inode_rename),
 	LSM_HOOK_INIT(task_fix_setuid, ksu_task_fix_setuid),
 	LSM_HOOK_INIT(bprm_check_security, ksu_bprm_check),
+#if !defined(CONFIG_KSU_TAMPER_SYSCALL_TABLE) && !defined(CONFIG_KSU_KPROBES_KSUD)
 	LSM_HOOK_INIT(file_permission, ksu_file_permission),
+#endif
 };
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
@@ -188,7 +190,7 @@ static void ksu_lsm_hook_restore(void)
 	preempt_disable();
 	local_irq_disable();
 
-#if 0 // we need this now for sulog
+#ifndef CONFIG_KSU_FEATURE_SULOG
 	if (orig_bprm_check_security) {
 		pr_info("%s: restoring: 0x%lx to 0x%lx\n", __func__, (long)ops->bprm_check_security, (long)orig_bprm_check_security);
 		ops->bprm_check_security = orig_bprm_check_security;
@@ -253,8 +255,10 @@ static void ksu_lsm_hook_init(void)
 	orig_bprm_check_security = ops->bprm_check_security;
 	ops->bprm_check_security = hook_bprm_check_security;
 
+#if !defined(CONFIG_KSU_TAMPER_SYSCALL_TABLE) && !defined(CONFIG_KSU_KPROBES_KSUD)
 	orig_file_permission = ops->file_permission;
 	ops->file_permission = hook_file_permission;
+#endif
 
 	smp_mb();
 

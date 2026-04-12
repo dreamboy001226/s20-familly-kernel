@@ -4,23 +4,17 @@ static bool ksu_adb_root __read_mostly = false;
 
 static long is_exec_adbd(const char __user **filename_user)
 {
-	static const char kAdbd[] = "/adbd";
-	static const size_t kAdbdLen = sizeof(kAdbd) - 1;
 	// should be bigger than `/apex/com.android.adbd/bin/adbd`
-	char buf[40];
-	long ret;
-	memset(buf, 0, sizeof(buf));
+	char buf[40] = { 0 };
+	size_t copysize = sizeof("/apex/com.android.adbd/bin/adbd");
 
-	ret = strncpy_from_user(buf, *filename_user, sizeof(buf));
-	if (ret < 0) {
-		pr_warn("Access filename when adb_root_handle_execve failed: %ld\n", ret);
-		return ret;
-	}
-
-	// strncpy_from_user may copy `sizeof(buf)` bytes
-	if (ret < kAdbdLen || ret >= sizeof(buf) || memcmp(buf + ret - kAdbdLen, kAdbd, kAdbdLen + 1) != 0) {
+	if (!!copy_from_user(buf, *filename_user, copysize))
 		return 0;
-	}
+
+	if (!!endswith(buf, "/adbd"))
+		return 0;
+
+	pr_info("%s: adbd: %s \n", __func__, buf);
 
 	return 1;
 }
@@ -57,14 +51,14 @@ static long setup_ld_preload(void ***envp_arg)
 	volatile unsigned long stackp = current->mm->start_stack; // its just a stack smash in the end, it'll work.
 #endif
 	unsigned long envp, ld_preload_p, ld_library_path_p;
-	unsigned long *envp_p = (void *)envp_arg;
+	unsigned long *envp_p = (uintptr_t)envp_arg;
 	unsigned long *tmp_env_p = NULL, *tmp_env_p2 = NULL;
 	size_t env_count = 0, total_size;
 	long ret;
 
 	envp = (char __user **)untagged_addr((unsigned long)*envp_p);
 
-	ld_preload_p = stackp = ALIGN_DOWN(stackp - sizeof(kLdPreload), 8);
+	ld_preload_p = stackp = ALIGN_DOWN(stackp - sizeof(kLdPreload), 8); // 2 words on 32-bit, 32-on-64 its gonna be fine dw.
 	ret = copy_to_user(ld_preload_p, kLdPreload, sizeof(kLdPreload));
 	if (ret != 0) {
 		pr_warn("write ld_preload when adb_root_handle_execve failed: %ld\n", ret);

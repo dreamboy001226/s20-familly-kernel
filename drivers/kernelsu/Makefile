@@ -11,8 +11,8 @@ MDIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 $(info -- KDIR: $(KDIR))
 $(info -- MDIR: $(MDIR))
 
-# compliant to last upstream kernel change as of 70ca135
-CFLAGS_ksu.o += -DKSU_VERSION=32447
+# compliant to last upstream kernel change as of 9ae97f9
+CFLAGS_ksu.o += -DKSU_VERSION=32449
 
 ifndef KSU_EXPECTED_SIZE
 KSU_EXPECTED_SIZE := 0x033b
@@ -54,7 +54,7 @@ endif
 # UL, look for read_iter on f_op struct
 ifeq ($(shell grep -q "read_iter" $(srctree)/include/linux/fs.h 2>/dev/null; echo $$?),0)
 $(info -- KernelSU/compat: f_op->read_iter found!)
-CFLAGS_ksu.o += -DKSU_HAS_FOP_READ_ITER
+#CFLAGS_ksu.o += -DKSU_HAS_FOP_READ_ITER
 endif
 
 # UL, look for iterate_dir on ‎fs/readdir.c
